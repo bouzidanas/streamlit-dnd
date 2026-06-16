@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<body>
+<div id="result2">PENDING</div>
+<script>
+// Minimal Streamlit component protocol implementation (no npm lib needed).
+function sendMessage(type, data) {
+    window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data), "*");
+}
+
+function onRender(event) {
+    const data = event.data;
+    if (data.type !== "streamlit:render") return;
+
+    let result;
+    try {
+        const n = window.parent.document.querySelectorAll('[class*="st-key-"]').length;
+        const container = window.parent.document.querySelector('.st-key-iframe_probe_container');
+        const childInfo = [];
+        if (container) {
+            for (const c of container.children) {
+                childInfo.push(c.getAttribute('data-testid') + ':' + c.className.split(' ').filter(x => x.startsWith('st-key-')).join(','));
+            }
+        }
+        result = 'COMPONENT_PARENT_OK n=' + n + ' container_children=[' + childInfo.join(' | ') + ']';
+    } catch (e) {
+        result = 'COMPONENT_PARENT_BLOCKED ' + e.message;
+    }
+    document.getElementById('result2').textContent = result;
+
+    // Send the result back to Python via setComponentValue
+    sendMessage("streamlit:setComponentValue", { value: result, dataType: "json" });
+}
+
+window.addEventListener("message", onRender);
+sendMessage("streamlit:componentReady", { apiVersion: 1 });
+sendMessage("streamlit:setFrameHeight", { height: 60 });
+</script>
+</body>
+</html>

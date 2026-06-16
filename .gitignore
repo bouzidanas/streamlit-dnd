@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.demo_arrangements.json
+.demo_arrangements.json.tmp
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual envs
+.venv/
+venv/

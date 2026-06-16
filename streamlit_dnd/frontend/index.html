@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>streamlit-dnd</title>
+</head>
+<body>
+  <!--
+    This component renders nothing visible. Its iframe is a vehicle for
+    injecting drag-and-drop behavior into the parent Streamlit document
+    (component iframes are same-origin, so window.parent.document is
+    accessible) and for reporting drop events back to Python via
+    setComponentValue.
+  -->
+  <script src="./streamlit-protocol.js"></script>
+  <script src="./main.js"></script>
+</body>
+</html>
