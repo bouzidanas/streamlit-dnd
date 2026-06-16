@@ -13,7 +13,6 @@ authors = [{ name = "Anas Bouzid", email = "anasbouzid@gmail.com" }]
 keywords = ["streamlit", "streamlit-component", "drag-and-drop", "dnd", "reorder"]
 classifiers = [
     "Development Status :: 4 - Beta",
-    "Framework :: Streamlit",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
