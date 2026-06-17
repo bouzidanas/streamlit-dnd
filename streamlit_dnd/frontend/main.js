@@ -65,6 +65,21 @@
 
   let observer = null;
 
+  /**
+   * Touch-drag state, or null. Native HTML5 drag-and-drop never fires on
+   * touch devices, so a pointer-based fallback drives the same `drag` engine
+   * from touch events. `active` flips true only once the finger has moved past
+   * a small threshold, so taps and scrolls that start on an item still work.
+   */
+  let touchDrag = null;
+
+  /** Whether the document-level touch listeners have been attached. */
+  let touchWired = false;
+
+  /** Movement (px) before a touch on an item is treated as a drag. */
+  const TOUCH_THRESHOLD = 8;
+
+
   // ---------------------------------------------------------------------------
   // DOM helpers
   // ---------------------------------------------------------------------------
@@ -99,9 +114,52 @@
       // injected for dnd) draggable.
       if (child.querySelector('iframe[title*="streamlit_dnd"]')) continue;
       if (child.classList.contains("stdnd-ignore")) continue;
+      // Caller-pinned exceptions: a child whose key is listed in `exclude`
+      // (config.exclude) is never draggable and never counts toward the index
+      // math, so placeholder hints / fixed headers can live inside an
+      // otherwise-draggable container. The container still reads as empty when
+      // its only child is an excluded placeholder.
+      if (isExcludedItem(child)) continue;
       items.push(child);
     }
     return items;
+  }
+
+  /** True if a child element is pinned out of dnd via the `exclude` list. */
+  function isExcludedItem(child) {
+    if (!config.exclude.length) return false;
+    const childKey = getItemKey(child);
+    return !!childKey && config.exclude.includes(childKey);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Empty-container placeholder (injected by the engine, like a widget's own
+  // placeholder text). Kept fully under our control so it carries none of the
+  // margins / min-heights a Streamlit markdown element would bring, which is
+  // what made an app-rendered hint sit shifted down inside the container.
+  // The placeholder is always present (when text is configured); whether it
+  // actually shows is a pure-CSS decision: it's visible only when it's the
+  // container's only child, so any real item, ghost preview, or drop indicator
+  // sibling hides it with no per-drag JS.
+  // ---------------------------------------------------------------------------
+
+  /** Ensure a container has its placeholder element (when text is configured). */
+  function setPlaceholder(containerEl, key) {
+    const p = config.placeholder;
+    const text = typeof p === "string" ? p : p ? p[key] : null;
+    let ph = containerEl.querySelector(":scope > .stdnd-placeholder");
+    if (text) {
+      if (!ph) {
+        ph = PDOC.createElement("div");
+        ph.className = "stdnd-placeholder stdnd-ignore";
+        containerEl.appendChild(ph);
+      }
+      // Only write when it actually changes: setting textContent is itself a
+      // DOM mutation the observer would see, re-triggering wireAll in a loop.
+      if (ph.textContent !== text) ph.textContent = text;
+    } else if (ph) {
+      ph.remove();
+    }
   }
 
   /** Extract the st-key of an item, or null if the item is unkeyed. */
@@ -159,6 +217,8 @@
         transition: opacity 0.1s ease;
         user-select: none;
         -webkit-user-select: none;
+        /* Dragging from the handle on touch should grab, not scroll. */
+        touch-action: none;
       }
       /* Corner placement, chosen from Python via handle_corner. */
       .stdnd-handle-top-right { top: 2px; right: 2px; }
@@ -285,6 +345,46 @@
       .stdnd-source-collapsed {
         display: none !important;
       }
+      /*
+       * Touch drag image: a clone that floats under the finger while a touch
+       * drag is in progress (native HTML5 drag images don't exist on touch).
+       * Positioned with fixed left/top set to the touch point; the translate
+       * centers it horizontally and nudges it below the fingertip so it stays
+       * visible. pointer-events:none keeps elementFromPoint() hitting the real
+       * containers underneath.
+       */
+      .stdnd-touch-clone {
+        position: fixed;
+        z-index: 1000000;
+        pointer-events: none;
+        opacity: 0.9;
+        transform: translate(-50%, 10px);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      /*
+       * Engine-injected placeholder for an empty container. Deliberately a
+       * plain element with no margins or min-height, so it sits at the
+       * container's natural top inset instead of being pushed down the way an
+       * app-rendered markdown hint was. pointer-events:none keeps it from
+       * intercepting drop events. Hidden by default; shown only when it's the
+       * container's only child, so any real item, ghost preview (live or
+       * materialized after a drop), or drop indicator sibling hides it.
+       */
+      .stdnd-placeholder {
+        display: none;
+        pointer-events: none;
+        opacity: 0.5;
+        font-style: italic;
+        font-size: 0.875rem;
+        line-height: 1.4;
+        width: 100%;
+        align-self: stretch;
+      }
+      .stdnd-placeholder:only-child {
+        display: block;
+      }
     `;
   }
 
@@ -386,9 +486,7 @@
    * explicitly. The clone is inert: no st-key classes (so it's never picked
    * up as a real item), no dnd wiring, no pointer events while previewing.
    */
-  function buildGhost(item, color) {
-    const clone = item.cloneNode(true);
-
+  function sanitizeClone(clone, item) {
     // Strip identity & wiring so the clone can't be mistaken for a real item.
     clone.classList.remove(
       "stdnd-draggable",
@@ -410,10 +508,6 @@
     delete clone.dataset.stdndIndex;
     clone.removeAttribute("draggable");
     clone.querySelector(":scope > .stdnd-handle")?.remove();
-    clone.classList.add("stdnd-ghost", "stdnd-ignore");
-    // Drive the ghost's outline + tint from the active drag color, same as
-    // the highlight indicator does.
-    clone.style.setProperty("--stdnd-color", color);
 
     // Copy canvas contents (st.line_chart / st.area_chart etc. render to
     // canvas; cloneNode leaves the cloned canvases blank).
@@ -428,7 +522,7 @@
       try {
         dst.getContext("2d").drawImage(src, 0, 0);
       } catch (err) {
-        /* tainted/webgl canvas: ghost shows blank chart area */
+        /* tainted/webgl canvas: clone shows blank chart area */
       }
     }
 
@@ -439,11 +533,33 @@
     for (let i = 0; i < srcInputs.length; i++) {
       if (dstInputs[i]) dstInputs[i].value = srcInputs[i].value;
     }
+  }
 
+  function buildGhost(item, color) {
+    const clone = item.cloneNode(true);
+    sanitizeClone(clone, item);
+    clone.classList.add("stdnd-ghost", "stdnd-ignore");
+    // Drive the ghost's outline + tint from the active drag color, same as
+    // the highlight indicator does.
+    clone.style.setProperty("--stdnd-color", color);
     // Match the original's rendered width so the preview doesn't reflow
     // text when dropped into a differently-sized column.
     clone.style.minHeight = item.getBoundingClientRect().height + "px";
+    return clone;
+  }
 
+  /**
+   * A clone used as the finger-following drag image on touch devices (native
+   * HTML5 drag has no equivalent of a touch drag image). It floats under the
+   * finger at fixed position; the real source is collapsed out of flow.
+   */
+  function buildTouchClone(item) {
+    const rect = item.getBoundingClientRect();
+    const clone = item.cloneNode(true);
+    sanitizeClone(clone, item);
+    clone.classList.add("stdnd-touch-clone", "stdnd-ignore");
+    clone.style.width = rect.width + "px";
+    clone.style.height = rect.height + "px";
     return clone;
   }
 
@@ -657,6 +773,16 @@
       const el = findContainer(key);
       if (!el) continue;
       wireContainer(el, key);
+      // Streamlit reuses DOM nodes across reruns, so a node that was a real
+      // draggable item last render can be reused to render an excluded
+      // child (e.g. a placeholder hint) this render. getItems() skips
+      // excluded children, so they'd otherwise keep their stale wiring and
+      // stay draggable — strip it explicitly.
+      for (const child of el.children) {
+        if (child.dataset.stdndWired === "1" && isExcludedItem(child)) {
+          unwireItem(child);
+        }
+      }
       const items = getItems(el);
       if (canDragFrom(key)) {
         items.forEach((item, i) => wireItem(item, key, i));
@@ -664,6 +790,9 @@
         // Container is destination-only: strip any stale drag wiring.
         items.forEach((item) => unwireItem(item));
       }
+      // Placeholder is always present (when configured); CSS shows it only
+      // while it's the container's only child.
+      setPlaceholder(el, key);
     }
 
     // wireAll only runs after a (re)render, so if a previous drop left a
@@ -673,6 +802,10 @@
   }
 
   function wireContainer(el, key) {
+    // The container key is recorded on every wire pass (even when listeners
+    // are already attached) so touch hit-testing can map an element under
+    // the finger back to its container key.
+    el.dataset.stdndKey = key;
     if (el.dataset.stdndContainer === config.instanceId) return;
     el.dataset.stdndContainer = config.instanceId;
     el.addEventListener("dragover", (e) => onDragOver(e, el, key));
@@ -805,21 +938,24 @@
    * Wire border-handle behavior onto an item (idempotent). The item only
    * becomes draggable while the pointer presses within its edge band, so the
    * interior stays free for interactive widgets. The listeners no-op unless
-   * border mode is currently active, so a DOM node reused across reruns in a
-   * different mode behaves correctly.
+   * border mode is currently active AND the item is still a wired dnd item, so
+   * a DOM node reused across reruns in a different mode — or reused to render
+   * an excluded child (e.g. a placeholder) — never becomes draggable.
    */
   function ensureBorderHandle(item) {
     if (item.dataset.stdndBorderWired === "1") return;
     item.dataset.stdndBorderWired = "1";
+    const borderActive = () =>
+      config.handle === "border" && item.dataset.stdndWired === "1";
     item.addEventListener("mousemove", (e) => {
-      if (config.handle !== "border") return;
+      if (!borderActive()) return;
       item.classList.toggle("stdnd-border-hot", inBorderBand(item, e));
     });
     item.addEventListener("mouseleave", () => {
       item.classList.remove("stdnd-border-hot");
     });
     item.addEventListener("mousedown", (e) => {
-      if (config.handle !== "border") return;
+      if (!borderActive()) return;
       item.draggable = inBorderBand(item, e);
     });
     item.addEventListener("mouseup", () => {
@@ -835,30 +971,37 @@
   // Drag event handlers
   // ---------------------------------------------------------------------------
 
+  /**
+   * Initialize the shared `drag` state for an item. Used by both the native
+   * dragstart handler and the touch fallback. Returns false if the item's
+   * container can't be dragged from.
+   */
+  function beginDrag(item) {
+    const containerKey = item.dataset.stdndContainerKey;
+    if (!containerKey || !canDragFrom(containerKey)) return false;
+    const containerEl = findContainer(containerKey);
+    const items = getItems(containerEl);
+    drag = {
+      item: item,
+      fromContainer: containerKey,
+      fromIndex: items.indexOf(item),
+      itemKey: getItemKey(item),
+    };
+    return true;
+  }
+
   function onDragStart(e) {
     const item = e.currentTarget;
-    const containerKey = item.dataset.stdndContainerKey;
-    if (!containerKey || !canDragFrom(containerKey)) {
+    if (!beginDrag(item)) {
       e.preventDefault();
       return;
     }
     // Don't let nested draggables (e.g. selected text) hijack the drag.
     e.stopPropagation();
 
-    const containerEl = findContainer(containerKey);
-    const items = getItems(containerEl);
-    const fromIndex = items.indexOf(item);
-
-    drag = {
-      item: item,
-      fromContainer: containerKey,
-      fromIndex: fromIndex,
-      itemKey: getItemKey(item),
-    };
-
     e.dataTransfer.effectAllowed = "move";
     // Some browsers require data to be set for the drag to start.
-    e.dataTransfer.setData("text/plain", drag.itemKey || String(fromIndex));
+    e.dataTransfer.setData("text/plain", drag.itemKey || String(drag.fromIndex));
     // Defer so the browser captures the un-faded element as the drag image.
     setTimeout(() => item.classList.add("stdnd-dragging"), 0);
   }
@@ -874,20 +1017,18 @@
     drag = null;
   }
 
-  function onDragOver(e, containerEl, containerKey) {
-    if (!drag) return;
-    if (!canDropTo(drag.fromContainer, containerKey)) return;
-
-    e.preventDefault(); // Required to allow dropping.
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = "move";
-
+  /**
+   * Update the drop indicators for a position over a container. Shared by the
+   * native dragover handler and the touch fallback (which feeds it the touch
+   * point). Caller is responsible for the drag/permission guards.
+   */
+  function showDropIndicators(containerEl, clientX, clientY) {
     const horizontal = isHorizontal(containerEl);
     const items = getItems(containerEl);
     const color = config.color;
 
     if (config.indicator === "highlight") {
-      const idx = computeTakeIndex(items, horizontal, e.clientX, e.clientY);
+      const idx = computeTakeIndex(items, horizontal, clientX, clientY);
       if (idx < items.length && items[idx] !== drag.item) {
         showHighlight(items[idx], color);
         if (lineEl) lineEl.style.display = "none";
@@ -899,13 +1040,24 @@
         hideIndicators();
       }
     } else if (config.indicator === "ghost") {
-      const idx = computeInsertIndex(items, horizontal, e.clientX, e.clientY);
+      const idx = computeInsertIndex(items, horizontal, clientX, clientY);
       placeGhost(containerEl, items, idx, color);
       hideIndicators();
     } else {
-      const idx = computeInsertIndex(items, horizontal, e.clientX, e.clientY);
+      const idx = computeInsertIndex(items, horizontal, clientX, clientY);
       showLine(containerEl, items, idx, horizontal, color);
     }
+  }
+
+  function onDragOver(e, containerEl, containerKey) {
+    if (!drag) return;
+    if (!canDropTo(drag.fromContainer, containerKey)) return;
+
+    e.preventDefault(); // Required to allow dropping.
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+
+    showDropIndicators(containerEl, e.clientX, e.clientY);
   }
 
   function onDragLeave(e, containerEl) {
@@ -935,6 +1087,15 @@
     e.preventDefault();
     e.stopPropagation();
 
+    performDrop(containerEl, containerKey, e.clientX, e.clientY);
+  }
+
+  /**
+   * Commit a drop of the active drag onto a container at a screen position.
+   * Shared by the native drop handler and the touch fallback; both have
+   * already verified `drag` exists and the move is permitted.
+   */
+  function performDrop(containerEl, containerKey, clientX, clientY) {
     const horizontal = isHorizontal(containerEl);
     const items = getItems(containerEl);
 
@@ -944,9 +1105,9 @@
     if (config.indicator === "ghost" && ghost.el && ghost.el.parentElement === containerEl) {
       toIndex = ghostInsertIndex(containerEl, items);
     } else if (config.indicator === "highlight") {
-      toIndex = computeTakeIndex(items, horizontal, e.clientX, e.clientY);
+      toIndex = computeTakeIndex(items, horizontal, clientX, clientY);
     } else {
-      toIndex = computeInsertIndex(items, horizontal, e.clientX, e.clientY);
+      toIndex = computeInsertIndex(items, horizontal, clientX, clientY);
     }
 
     const event = {
@@ -986,6 +1147,166 @@
 
     StreamlitProtocol.setComponentValue(event);
   }
+
+
+  // ---------------------------------------------------------------------------
+  // Touch fallback (native HTML5 drag never fires on touch devices)
+  // ---------------------------------------------------------------------------
+
+  /** Attach the document-level touch listeners once. */
+  function wireTouch() {
+    if (touchWired) return;
+    touchWired = true;
+    // touchmove must be non-passive so it can preventDefault() to stop the
+    // page scrolling while a drag is in progress.
+    PDOC.addEventListener("touchstart", onTouchStart, { passive: true });
+    PDOC.addEventListener("touchmove", onTouchMove, { passive: false });
+    PDOC.addEventListener("touchend", onTouchEnd, { passive: true });
+    PDOC.addEventListener("touchcancel", onTouchCancel, { passive: true });
+  }
+
+  /** Map a screen point to one of this instance's containers, or null. */
+  function containerAtPoint(x, y) {
+    const target = PDOC.elementFromPoint(x, y);
+    if (!target || !target.closest) return null;
+    const el = target.closest("[data-stdnd-key]");
+    if (!el || el.dataset.stdndContainer !== config.instanceId) return null;
+    return el;
+  }
+
+  function moveTouchClone(x, y) {
+    if (touchDrag && touchDrag.cloneEl) {
+      touchDrag.cloneEl.style.left = x + "px";
+      touchDrag.cloneEl.style.top = y + "px";
+    }
+  }
+
+  function removeTouchClone() {
+    if (touchDrag && touchDrag.cloneEl) {
+      touchDrag.cloneEl.remove();
+      touchDrag.cloneEl = null;
+    }
+  }
+
+  /** Promote a pending touch into a live drag (clone + lifted source). */
+  function activateTouchDrag() {
+    const item = touchDrag.item;
+    if (!beginDrag(item)) {
+      touchDrag = null;
+      return false;
+    }
+    touchDrag.active = true;
+    // Build the finger-following clone from the still-full item, then collapse
+    // the original out of flow (same lifted-out look as the native drag).
+    touchDrag.cloneEl = buildTouchClone(item);
+    PDOC.body.appendChild(touchDrag.cloneEl);
+    item.classList.add("stdnd-dragging");
+    return true;
+  }
+
+  function onTouchStart(e) {
+    if (!config || drag || touchDrag) return;
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const target = e.target;
+    if (!target || !target.closest) return;
+    const item = target.closest('[data-stdnd-wired="1"]');
+    if (!item) return;
+    const containerKey = item.dataset.stdndContainerKey;
+    if (!containerKey || !canDragFrom(containerKey)) return;
+
+    // Honor the handle mode: a corner handle requires the touch to land on the
+    // grip; a border handle requires the touch to land in the edge band. In
+    // both cases the interior stays free for taps on inner widgets.
+    if (config.handle === "corner") {
+      if (!target.closest(".stdnd-handle")) return;
+    } else if (config.handle === "border") {
+      if (!inBorderBand(item, t)) return;
+    }
+
+    touchDrag = {
+      item: item,
+      startX: t.clientX,
+      startY: t.clientY,
+      active: false,
+      cloneEl: null,
+    };
+  }
+
+  function onTouchMove(e) {
+    if (!touchDrag) return;
+    const t = e.touches[0];
+    if (!t) return;
+
+    if (!touchDrag.active) {
+      const dx = t.clientX - touchDrag.startX;
+      const dy = t.clientY - touchDrag.startY;
+      if (Math.hypot(dx, dy) < TOUCH_THRESHOLD) return; // still a tap/scroll
+      if (!activateTouchDrag()) return;
+    }
+
+    // Now committed to a drag: stop the page from scrolling under the finger.
+    e.preventDefault();
+    moveTouchClone(t.clientX, t.clientY);
+
+    const containerEl = containerAtPoint(t.clientX, t.clientY);
+    if (
+      containerEl &&
+      canDropTo(drag.fromContainer, containerEl.dataset.stdndKey)
+    ) {
+      showDropIndicators(containerEl, t.clientX, t.clientY);
+    } else {
+      hideIndicators();
+      removeGhostPreview();
+    }
+  }
+
+  function onTouchEnd(e) {
+    if (!touchDrag) return;
+    const item = touchDrag.item;
+    const wasActive = touchDrag.active;
+    removeTouchClone();
+    touchDrag = null;
+
+    if (!wasActive) return; // never crossed the threshold: it was a tap
+
+    const t = e.changedTouches && e.changedTouches[0];
+    let dropped = false;
+    if (t && drag) {
+      const containerEl = containerAtPoint(t.clientX, t.clientY);
+      if (
+        containerEl &&
+        canDropTo(drag.fromContainer, containerEl.dataset.stdndKey)
+      ) {
+        performDrop(containerEl, containerEl.dataset.stdndKey, t.clientX, t.clientY);
+        dropped = true;
+      }
+    }
+
+    // Native drops rely on dragend to drop the lifted-out class; touch has no
+    // dragend, so clear it here (harmless when the source is already collapsed
+    // by a ghost/hold).
+    item.classList.remove("stdnd-dragging");
+    if (!dropped) {
+      hideIndicators();
+      removeGhostPreview();
+      drag = null;
+    }
+  }
+
+  function onTouchCancel() {
+    if (!touchDrag) return;
+    const item = touchDrag.item;
+    const wasActive = touchDrag.active;
+    removeTouchClone();
+    touchDrag = null;
+    if (!wasActive) return;
+    item.classList.remove("stdnd-dragging");
+    hideIndicators();
+    removeGhostPreview();
+    drag = null;
+  }
+
 
   // ---------------------------------------------------------------------------
   // Re-wiring on Streamlit reruns
@@ -1067,6 +1388,10 @@
       cross: args.cross !== false,
       sources: args.sources || null,
       destinations: args.destinations || null,
+      exclude: args.exclude || [],
+      // string (same text for every container) | object keyed by container
+      // key | null (no placeholder).
+      placeholder: args.placeholder != null ? args.placeholder : null,
       // false (grab anywhere) | "corner" (icon handle) | "border" (edge band).
       handle:
         args.handle === "border"
@@ -1094,6 +1419,7 @@
 
     wireAll();
     startObserver();
+    wireTouch();
     // The component itself stays invisible.
     StreamlitProtocol.setFrameHeight(0);
     hideOwnHost();

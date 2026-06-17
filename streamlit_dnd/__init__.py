@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal, Mapping, Sequence
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -95,6 +95,8 @@ def dnd(
     cross: bool = True,
     sources: Sequence[str] | None = None,
     destinations: Sequence[str] | None = None,
+    exclude: Sequence[str] | None = None,
+    placeholder: str | Mapping[str, str] | None = None,
     handle: bool | Literal["border"] = "border",
     handle_corner: Literal[
         "top-left", "top-right", "bottom-left", "bottom-right"
@@ -125,6 +127,20 @@ def dnd(
         ``destinations``).
     destinations:
         If set, items can only be dropped into these containers.
+    exclude:
+        Keys of child elements that must never be draggable. An item is
+        excluded when its ``key=`` (the same key the move event reports as
+        ``item_key``) appears in this list, so placeholder hints, headers, or
+        any other fixed content inside a draggable container can be pinned in
+        place. Excluded items are also ignored by the drop-position math, so
+        the container behaves as if they weren't there.
+    placeholder:
+        Dimmed, italic hint text shown inside a container while it has no
+        draggable items (e.g. ``"Drop items here"``). The component injects and
+        removes it automatically, so empty drop targets don't look broken. Pass
+        a single string to use the same text for every container, or a mapping
+        of container key -> text to give each container its own message.
+        ``None`` (default) shows no placeholder.
     handle:
         How an item is grabbed. ``"border"`` (default): the item's edges
         become the handle, so you can grab it from a band running around its
@@ -192,6 +208,10 @@ def dnd(
         cross=cross,
         sources=list(sources) if sources is not None else None,
         destinations=list(destinations) if destinations is not None else None,
+        exclude=list(exclude) if exclude is not None else None,
+        placeholder=dict(placeholder)
+        if isinstance(placeholder, Mapping)
+        else placeholder,
         handle=handle,
         handle_corner=handle_corner,
         handle_icon=handle_icon,

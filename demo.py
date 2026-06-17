@@ -253,6 +253,7 @@ def render_persisted(label: str, data) -> None:
         st.json(data)
 
 
+
 # ==============================================================================
 # Example 0: Re-ordering — one container, reorder only, every item different
 # ==============================================================================
@@ -378,6 +379,7 @@ with st.container():
         "kanban_doing",
         "kanban_done",
         cross=True,
+        placeholder="Empty — drag cards here",
         handle=handle_arg,
         handle_corner=handle_corner,
         handle_icon=handle_icon,
@@ -419,8 +421,6 @@ with st.container():
     with queue_col:
         st.subheader("Up next (drop here)")
         with st.container(key="playlist_queue", border=True):
-            if not st.session_state.playlist["queue"]:
-                st.caption("Queue is empty — drag songs here")
             for song in st.session_state.playlist["queue"]:
                 with st.container(key=f"song_{song}", border=True):
                     st.markdown(f"🎶 **{song}**")
@@ -431,6 +431,10 @@ with st.container():
         # library: items can leave; queue: items can be dropped + reordered.
         sources=["playlist_library", "playlist_queue"],
         destinations=["playlist_queue"],
+        placeholder={
+            "playlist_library": "Library is empty",
+            "playlist_queue": "Queue is empty — drag songs here",
+        },
         handle=handle_arg,
         handle_corner=handle_corner,
         handle_icon=handle_icon,
@@ -526,6 +530,7 @@ with st.container():
         "board_left",
         "board_right",
         cross=True,
+        placeholder="Empty — drag cards here",
         handle=handle_arg,
         handle_corner=handle_corner,
         handle_icon=handle_icon,

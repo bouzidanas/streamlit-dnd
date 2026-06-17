@@ -5,6 +5,9 @@ Drag-and-drop reordering for the direct children of Streamlit containers — reo
 Built and tested against **Streamlit 1.58**.
 
 ![demo](https://img.shields.io/badge/streamlit-1.58%2B-red)
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://dnd-demo.streamlit.app)
+
+**[Try the live demo](https://dnd-demo.streamlit.app)** to play with every option in the browser, no install needed.
 
 ## Install
 
@@ -21,7 +24,8 @@ from streamlit_dnd import dnd, apply_move
 
 ## Run the demo
 
-To try the bundled demo from a clone of this repo:
+Try the **[hosted demo](https://dnd-demo.streamlit.app)**, or run the bundled
+demo from a clone of this repo:
 
 ```bash
 pip install -r requirements.txt
@@ -67,6 +71,8 @@ if event:
 | `cross` | `bool` | `True` | Allow dragging items between containers. `False` = reorder within each container only. Ignored when `sources`/`destinations` are set. |
 | `sources` | `list[str] \| None` | `None` | If set, only these containers' items can be dragged. |
 | `destinations` | `list[str] \| None` | `None` | If set, items can only be dropped into these containers. |
+| `exclude` | `list[str] \| None` | `None` | Keys of child elements that must never be draggable (matched against each item's `key=`). Excluded items are pinned in place and ignored by the drop-position math — handy for fixed headers or other non-draggable content inside a draggable container. |
+| `placeholder` | `str \| dict[str, str] \| None` | `None` | Dimmed, italic hint shown inside a container while it has no draggable items (e.g. `"Drop items here"`). The component injects/removes it automatically. Pass one string for all containers, or a `{container_key: text}` mapping for per-container messages. |
 | `handle` | `bool \| "border"` | `"border"` | `"border"`: the item's edges become the handle (grab from a band around the border, interior stays free for buttons/inputs). `False`: grab items anywhere. `True`: items get a small corner drag handle and only drag from it. |
 | `handle_corner` | `"top-right" \| "top-left" \| "bottom-right" \| "bottom-left"` | `"top-right"` | Which corner the handle icon sits in when `handle=True`. |
 | `handle_icon` | `str` | `"⠿"` | What the corner handle shows: any text/emoji, or a Streamlit Material icon as `":material/<name>:"` (e.g. `":material/drag_indicator:"`). Applies when `handle=True`. |
