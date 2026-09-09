@@ -20,19 +20,19 @@ if "list_b" not in st.session_state:
 # --- render -------------------------------------------------------------------
 col1, col2 = st.columns(2)
 
-with col1:
+with col1, st.container(key="cont_a", border=True):
+    # Regression coverage: fixed, unkeyed content inside a dnd container
+    # must not be counted as a movable list entry.
     st.subheader("List A")
-    with st.container(key="cont_a", border=True):
-        for name in st.session_state.list_a:
-            with st.container(key=f"item_{name}", border=True):
-                st.write(name)
+    for name in st.session_state.list_a:
+        with st.container(key=f"item_{name}", border=True):
+            st.write(name)
 
-with col2:
+with col2, st.container(key="cont_b", border=True):
     st.subheader("List B")
-    with st.container(key="cont_b", border=True):
-        for name in st.session_state.list_b:
-            with st.container(key=f"item_{name}", border=True):
-                st.write(name)
+    for name in st.session_state.list_b:
+        with st.container(key=f"item_{name}", border=True):
+            st.write(name)
 
 # --- dnd ----------------------------------------------------------------------
 event = dnd("cont_a", "cont_b", cross=True, indicator="line", color="#00c853")

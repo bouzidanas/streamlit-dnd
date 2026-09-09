@@ -72,10 +72,9 @@ SIMULATE_DRAG_JS = """
     const log = [];
     const contA = document.querySelector('.st-key-cont_a');
     const contB = document.querySelector('.st-key-cont_b');
-    const items = [...contA.children].filter(c => {
-        const t = c.getAttribute('data-testid');
-        return t === 'stElementContainer' || t === 'stLayoutWrapper';
-    });
+    const items = [...contA.children].filter(
+        c => c.dataset.stdndWired === '1'
+    );
     const dragged = items[0];
     log.push('dragging: ' + [...dragged.classList].filter(x => x.startsWith('st-key')).join(','));
 
@@ -149,9 +148,11 @@ def main() -> int:
         if not wiring.get("styles_injected"):
             failures.append("styles not injected")
         items_a = wiring.get("cont_a_items", [])
-        draggable_items = [i for i in items_a if i["draggable"]]
-        if not draggable_items:
-            failures.append("no draggable items in container A")
+        wired_items = [i for i in items_a if i["wired"] == "1"]
+        if len(wired_items) != 3:
+            failures.append(f"expected 3 keyed draggable items, got {len(wired_items)}")
+        if items_a and items_a[0]["wired"] is not None:
+            failures.append("unkeyed heading was incorrectly wired as an item")
 
         # Simulate the drag
         print("\n=== DRAG SIMULATION ===")

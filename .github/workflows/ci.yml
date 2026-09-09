@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    name: Unit and package / Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install test dependencies
+        run: python -m pip install -e ".[test]"
+      - name: Run unit tests
+        run: python -m pytest
+      - name: Lint Python
+        run: |
+          python -m ruff check streamlit_dnd tests
+          python -m ruff format --check streamlit_dnd tests
+      - name: Check frontend syntax
+        run: node --check streamlit_dnd/frontend/main.js
+      - name: Build and inspect distributions
+        run: |
+          python -m build
+          python -m twine check dist/*
+
+  e2e:
+    name: E2E / ${{ matrix.browser }} / Streamlit ${{ matrix.streamlit }}
+    needs: unit
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            streamlit: "1.58.0"
+          - browser: chromium
+            streamlit: latest
+          - browser: firefox
+            streamlit: latest
+          - browser: webkit
+            streamlit: latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel and install test runtime
+        run: |
+          python -m pip install build playwright
+          python -m build --wheel
+          python -m pip install --force-reinstall dist/*.whl
+      - name: Install minimum Streamlit
+        if: matrix.streamlit != 'latest'
+        run: python -m pip install --force-reinstall "streamlit==${{ matrix.streamlit }}"
+      - name: Install browser
+        run: python -m playwright install --with-deps "${{ matrix.browser }}"
+      - name: Run packaged real-input E2E
+        run: python tests/e2e_real.py --browser "${{ matrix.browser }}" --artifacts test-results/e2e
+      - name: Upload E2E diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ matrix.browser }}-${{ matrix.streamlit }}
+          path: test-results/e2e/
+          if-no-files-found: ignore

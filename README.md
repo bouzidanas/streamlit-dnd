@@ -1,8 +1,10 @@
 # streamlit-dnd
 
-Drag-and-drop reordering for the direct children of Streamlit containers — reorder items inside a container or move them between containers. Arrangements are applied to `st.session_state` (and, in the demo, mirrored to disk so they survive page refreshes and app restarts).
+Drag-and-drop reordering for keyed children of Streamlit containers — reorder
+items inside a container or move them between containers. Fixed headings and
+controls can live alongside the cards without corrupting list indices.
 
-Built and tested against **Streamlit 1.58**.
+Tested against **Streamlit 1.58 through 1.63**.
 
 ![demo](https://img.shields.io/badge/streamlit-1.58%2B-red)
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://dnd-demo.streamlit.app)
@@ -32,23 +34,33 @@ pip install -r requirements.txt
 streamlit run demo.py
 ```
 
+## Upgrading from 0.1
+
+Version 0.2 moves only keyed direct children by default. If a 0.1 app rendered
+unkeyed draggable children, either give each child a stable `key=` (recommended)
+or pass `item_mode="all"` to preserve the old behavior. `apply_move` remains
+compatible with mappings of container keys to lists and now accepts additional
+collection shapes described below.
+
 ## Usage
 
 ```python
 import streamlit as st
 from streamlit_dnd import dnd, apply_move
 
-if "items" not in st.session_state:
-    st.session_state.items = {"left": ["A", "B", "C"], "right": ["D"]}
+if "board" not in st.session_state:
+    st.session_state["board"] = {"left": ["A", "B", "C"], "right": ["D"]}
 
 # 1. Render keyed containers whose children come from session state
 col1, col2 = st.columns(2)
 with col1, st.container(key="left", border=True):
-    for it in st.session_state.items["left"]:
+    st.subheader("Available")  # fixed: unkeyed children are ignored by default
+    for it in st.session_state["board"]["left"]:
         with st.container(key=f"item_{it}", border=True):
             st.write(it)
 with col2, st.container(key="right", border=True):
-    for it in st.session_state.items["right"]:
+    st.subheader("Selected")
+    for it in st.session_state["board"]["right"]:
         with st.container(key=f"item_{it}", border=True):
             st.write(it)
 
@@ -57,7 +69,7 @@ event = dnd("left", "right")
 
 # 3. Apply drops to session state and rerun
 if event:
-    apply_move(event, st.session_state.items)
+    apply_move(event, st.session_state["board"])
     st.rerun()
 ```
 
@@ -72,6 +84,7 @@ if event:
 | `sources` | `list[str] \| None` | `None` | If set, only these containers' items can be dragged. |
 | `destinations` | `list[str] \| None` | `None` | If set, items can only be dropped into these containers. |
 | `exclude` | `list[str] \| None` | `None` | Keys of child elements that must never be draggable (matched against each item's `key=`). Excluded items are pinned in place and ignored by the drop-position math — handy for fixed headers or other non-draggable content inside a draggable container. |
+| `item_mode` | `"keyed" \| "all"` | `"keyed"` | `"keyed"` safely moves only children with their own `key=` and ignores fixed unkeyed content. `"all"` enables the pre-0.2 behavior where every direct child is movable. |
 | `placeholder` | `str \| dict[str, str] \| None` | `None` | Dimmed, italic hint shown inside a container while it has no draggable items (e.g. `"Drop items here"`). The component injects/removes it automatically. Pass one string for all containers, or a `{container_key: text}` mapping for per-container messages. |
 | `handle` | `bool \| "border"` | `"border"` | `"border"`: the item's edges become the handle (grab from a band around the border, interior stays free for buttons/inputs). `False`: grab items anywhere. `True`: items get a small corner drag handle and only drag from it. |
 | `handle_corner` | `"top-right" \| "top-left" \| "bottom-right" \| "bottom-left"` | `"top-right"` | Which corner the handle icon sits in when `handle=True`. |
@@ -87,18 +100,31 @@ Returns a **`DropEvent`** for each completed drop (then `None` until the next dr
 class DropEvent:
     from_container: str    # container key the item left
     to_container: str      # container key the item entered (== from_container for reorders)
-    item_key: str | None   # st key of the dragged element (None if unkeyed)
+    item_key: str | None   # st key (None only with item_mode="all")
     from_index: int        # position before the move
     to_index: int          # insertion position (pre-removal indexing for same-container moves)
 ```
 
-### `apply_move(event, lists) -> None`
+### `apply_move(event, collections, *, container_key=None) -> None`
 
-Convenience helper that applies a `DropEvent` to plain Python lists in place, handling the same-container index shift:
+The helper supports lists and insertion-ordered dictionaries:
 
 ```python
+# Multiple list containers
 apply_move(event, {"left": st.session_state.left, "right": st.session_state.right})
+
+# A single list can be passed directly
+apply_move(event, st.session_state.tasks)
+
+# Reorder one dict of named objects, such as DataFrames
+apply_move(event, st.session_state.dfs, container_key="dataframes")
+
+# Move entries between two dicts
+apply_move(event, {"left": st.session_state.dfs, "right": st.session_state.more_dfs})
 ```
+
+For a container mapping, its keys must match the keys passed to `dnd()`. A
+mismatch now raises an error that shows the expected shape and supplied keys.
 
 ## Recipes
 
@@ -107,6 +133,33 @@ apply_move(event, {"left": st.session_state.left, "right": st.session_state.righ
 ```python
 dnd("my_list", cross=False)
 ```
+
+**Legacy unkeyed children:**
+
+```python
+# Every direct child is movable, as in streamlit-dnd 0.1.x. Your backing list
+# must have exactly one entry per rendered child and use the same order.
+dnd("my_list", item_mode="all")
+```
+
+**Named DataFrames as draggable cards:**
+
+```python
+with st.container(key="dataframes", border=True):
+    st.subheader("Reports")  # fixed and ignored by the index math
+    for name, frame in st.session_state.dfs.items():
+        with st.container(key=f"frame_{name}", border=True):
+            st.write(name)
+            st.dataframe(frame)
+
+event = dnd("dataframes")
+if event:
+    apply_move(event, st.session_state.dfs, container_key="dataframes")
+    st.rerun()
+```
+
+This reorders whole DataFrame cards. It does not make individual rows inside
+`st.dataframe` draggable.
 
 **Source → destination flow** (e.g. a palette you drag items out of, into a canvas):
 
@@ -165,12 +218,12 @@ DEFAULTS = {"left": ["A", "B", "C"], "right": ["D"]}
 
 def save():
     tmp = STORE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(st.session_state.items))
+    tmp.write_text(json.dumps(st.session_state["board"]))
     tmp.replace(STORE)  # atomic write
 
 # Seed new sessions from disk (or defaults)
-if "items" not in st.session_state:
-    st.session_state.items = (
+if "board" not in st.session_state:
+    st.session_state["board"] = (
         json.loads(STORE.read_text()) if STORE.exists() else copy.deepcopy(DEFAULTS)
     )
 
@@ -178,14 +231,14 @@ if "items" not in st.session_state:
 
 event = dnd("left", "right")
 if event:
-    apply_move(event, st.session_state.items)
+    apply_move(event, st.session_state["board"])
     save()          # <- mirror the change to disk
     st.rerun()
 
 # Reset = delete the store + restore defaults
 if st.button("Reset"):
     STORE.unlink(missing_ok=True)
-    st.session_state.items = copy.deepcopy(DEFAULTS)
+    st.session_state["board"] = copy.deepcopy(DEFAULTS)
     st.rerun()
 ```
 
@@ -202,11 +255,12 @@ This module mounts an **invisible custom component** (a same-origin iframe) that
 1. Reaches into the parent document (`window.parent.document`) — possible because
    Streamlit serves component iframes from the same origin with
    `allow-same-origin`.
-2. Finds your containers via `.st-key-<key>` and identifies their **direct
-   children**: in Streamlit 1.58's DOM, every visual child of a container is a
+2. Finds your containers via `.st-key-<key>` and identifies eligible **direct
+   children**: in Streamlit 1.58–1.63's DOM, every visual child of a container is a
    direct DOM child that is either a `div[data-testid="stElementContainer"]`
    (simple elements/widgets) or a `div[data-testid="stLayoutWrapper"]` (nested
    containers, expanders).
+   By default, only children with their own Streamlit key are eligible.
 3. Wires native HTML5 drag-and-drop handlers onto those children, draws the
    drop indicators, and enforces the cross/sources/destinations rules.
 4. On drop, sends `{from_container, to_container, item_key, from_index, to_index}`
@@ -235,12 +289,11 @@ This module mounts an **invisible custom component** (a same-origin iframe) that
 
 - **DOM coupling**: this relies on Streamlit's internal DOM structure
   (`stElementContainer` / `stLayoutWrapper` test ids and `st-key-*` classes).
-  It is verified against Streamlit 1.58; future Streamlit versions may need
+  It is verified against Streamlit 1.58 through 1.63; future versions may need
   small selector updates in `streamlit_dnd/frontend/main.js`.
-- **Item identity**: give every draggable child its own `key=` (the easiest,
-  most robust pattern: make each draggable item a keyed `st.container`).
-  Unkeyed children still drag, but `DropEvent.item_key` will be `None` and
-  you'll have to rely on indices alone.
+- **Item identity**: every draggable child needs its own unique `key=` in the
+  default mode. Use `item_mode="all"` only when intentionally moving unkeyed
+  children and keeping a one-to-one backing collection for all of them.
 - **Render before dnd**: call `dnd()` *after* the containers it targets have
   been rendered in the script.
 
@@ -256,8 +309,11 @@ streamlit-dnd/
 │       ├── streamlit-protocol.js# minimal Streamlit component protocol
 │       └── main.js              # the dnd engine (parent-DOM wiring)
 ├── tests/
-│   ├── test_apply_move.py       # unit tests for index math
+│   ├── test_apply_move.py       # unit tests for collection/index behavior
+│   ├── test_api.py              # validation + version consistency
 │   ├── minimal_app.py           # minimal app for e2e testing
+│   ├── e2e_app.py               # packaged-wheel E2E fixture app
+│   ├── e2e_real.py              # real mouse input against live Streamlit
 │   ├── e2e_module.py            # Playwright e2e: wiring + simulated drag
 │   ├── e2e_demo.py              # Playwright e2e: full demo verification
 │   ├── e2e_ghost.py             # Playwright e2e: ghost indicator lifecycle
@@ -269,7 +325,7 @@ streamlit-dnd/
 
 ```bash
 # Unit tests
-python tests/test_apply_move.py
+python -m pytest
 
 # E2E (needs playwright + chromium)
 streamlit run tests/minimal_app.py --server.port 8599 --server.headless true &
@@ -279,4 +335,11 @@ streamlit run demo.py --server.port 8599 --server.headless true &
 python tests/e2e_demo.py
 python tests/e2e_ghost.py
 python tests/e2e_persistence.py
+
+# True packaged E2E: build/install the wheel first, then drive a real mouse
+# against a live Streamlit app (requires Playwright's Chromium browser).
+python -m build
+python -m pip install --force-reinstall dist/streamlit_dnd-0.2.0-py3-none-any.whl
+python -m playwright install chromium
+python tests/e2e_real.py --browser chromium
 ```

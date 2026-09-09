@@ -5,9 +5,10 @@
  * component iframes are same-origin, this script can reach into
  * window.parent.document, find the keyed containers configured from Python
  * (`.st-key-<key>` classes), and wire native HTML5 drag-and-drop onto their
- * direct children.
+ * keyed direct children. Unkeyed fixed content is ignored by default so the
+ * browser indices stay aligned with the backing Python collections.
  *
- * DOM facts (verified against Streamlit 1.58):
+ * DOM facts (verified against Streamlit 1.58 through 1.63):
  *   - A keyed st.container renders as
  *       div[data-testid="stVerticalBlock" | "stHorizontalBlock"].st-key-<key>
  *   - Its visual "direct children" are its direct DOM children:
@@ -100,10 +101,10 @@
   }
 
   /**
-   * The draggable items of a container: its direct DOM children that are
-   * Streamlit element containers or layout wrappers. Items hosting this
-   * component's own iframe (or any stIFrame) are excluded so injected
-   * machinery never becomes draggable.
+   * Eligible direct DOM children that are Streamlit element containers or
+   * layout wrappers. In the safe default mode, children must have their own
+   * Streamlit key; this leaves headings and controls fixed without affecting
+   * position math. ``item_mode="all"`` opts into the legacy behavior.
    */
   function getItems(containerEl) {
     const items = [];
@@ -120,6 +121,7 @@
       // otherwise-draggable container. The container still reads as empty when
       // its only child is an excluded placeholder.
       if (isExcludedItem(child)) continue;
+      if (config.itemMode === "keyed" && !getItemKey(child)) continue;
       items.push(child);
     }
     return items;
@@ -137,13 +139,12 @@
   // placeholder text). Kept fully under our control so it carries none of the
   // margins / min-heights a Streamlit markdown element would bring, which is
   // what made an app-rendered hint sit shifted down inside the container.
-  // The placeholder is always present (when text is configured); whether it
-  // actually shows is a pure-CSS decision: it's visible only when it's the
-  // container's only child, so any real item, ghost preview, or drop indicator
-  // sibling hides it with no per-drag JS.
+  // The placeholder is always present (when text is configured). Its hidden
+  // state follows draggable-item count, so fixed unkeyed content can coexist
+  // with an empty-state hint.
   // ---------------------------------------------------------------------------
 
-  /** Ensure a container has its placeholder element (when text is configured). */
+  /** Ensure a container has the right placeholder and visibility. */
   function setPlaceholder(containerEl, key) {
     const p = config.placeholder;
     const text = typeof p === "string" ? p : p ? p[key] : null;
@@ -157,6 +158,8 @@
       // Only write when it actually changes: setting textContent is itself a
       // DOM mutation the observer would see, re-triggering wireAll in a loop.
       if (ph.textContent !== text) ph.textContent = text;
+      const hasGhost = ghost.el && ghost.el.parentElement === containerEl;
+      ph.hidden = getItems(containerEl).length > 0 || !!hasGhost;
     } else if (ph) {
       ph.remove();
     }
@@ -368,12 +371,11 @@
        * plain element with no margins or min-height, so it sits at the
        * container's natural top inset instead of being pushed down the way an
        * app-rendered markdown hint was. pointer-events:none keeps it from
-       * intercepting drop events. Hidden by default; shown only when it's the
-       * container's only child, so any real item, ghost preview (live or
-       * materialized after a drop), or drop indicator sibling hides it.
+       * intercepting drop events. JavaScript toggles the hidden attribute
+       * based on eligible item count rather than the raw DOM child count.
        */
       .stdnd-placeholder {
-        display: none;
+        display: block;
         pointer-events: none;
         opacity: 0.5;
         font-style: italic;
@@ -382,8 +384,8 @@
         width: 100%;
         align-self: stretch;
       }
-      .stdnd-placeholder:only-child {
-        display: block;
+      .stdnd-placeholder[hidden] {
+        display: none !important;
       }
     `;
   }
@@ -586,11 +588,16 @@
       if (ghost.el.parentElement === containerEl) return;
     }
 
+    const previousContainer = ghost.el.parentElement;
     if (anchor) {
       containerEl.insertBefore(ghost.el, anchor);
     } else {
       containerEl.appendChild(ghost.el);
     }
+    if (previousContainer && previousContainer !== containerEl) {
+      setPlaceholder(previousContainer, previousContainer.dataset.stdndKey);
+    }
+    setPlaceholder(containerEl, containerEl.dataset.stdndKey);
   }
 
   /**
@@ -621,6 +628,7 @@
 
   /** Remove the ghost and undo any source collapse. */
   function removeGhost() {
+    const previewContainer = ghost.el && ghost.el.parentElement;
     if (ghost.cleanupTimer) {
       clearTimeout(ghost.cleanupTimer);
       ghost.cleanupTimer = null;
@@ -635,6 +643,9 @@
     }
     ghost.destContainer = null;
     ghost.materialized = false;
+    if (previewContainer && previewContainer.dataset.stdndKey) {
+      setPlaceholder(previewContainer, previewContainer.dataset.stdndKey);
+    }
   }
 
   /** Remove the ghost only if it's still a hover preview (not materialized). */
@@ -773,25 +784,23 @@
       const el = findContainer(key);
       if (!el) continue;
       wireContainer(el, key);
-      // Streamlit reuses DOM nodes across reruns, so a node that was a real
-      // draggable item last render can be reused to render an excluded
-      // child (e.g. a placeholder hint) this render. getItems() skips
-      // excluded children, so they'd otherwise keep their stale wiring and
-      // stay draggable — strip it explicitly.
+      const items = getItems(el);
+      // Streamlit reuses DOM nodes across reruns. Strip stale wiring from any
+      // child that is no longer eligible because it became excluded, unkeyed,
+      // or internal component machinery.
       for (const child of el.children) {
-        if (child.dataset.stdndWired === "1" && isExcludedItem(child)) {
+        if (child.dataset.stdndWired === "1" && !items.includes(child)) {
           unwireItem(child);
         }
       }
-      const items = getItems(el);
       if (canDragFrom(key)) {
         items.forEach((item, i) => wireItem(item, key, i));
       } else {
         // Container is destination-only: strip any stale drag wiring.
         items.forEach((item) => unwireItem(item));
       }
-      // Placeholder is always present (when configured); CSS shows it only
-      // while it's the container's only child.
+      // Placeholder is always present (when configured); its hidden state
+      // tracks eligible items rather than raw DOM children.
       setPlaceholder(el, key);
     }
 
@@ -1389,6 +1398,7 @@
       sources: args.sources || null,
       destinations: args.destinations || null,
       exclude: args.exclude || [],
+      itemMode: args.item_mode === "all" ? "all" : "keyed",
       // string (same text for every container) | object keyed by container
       // key | null (no placeholder).
       placeholder: args.placeholder != null ? args.placeholder : null,

@@ -1,4 +1,5 @@
 # Ship the static frontend assets (no build step; these are served as-is).
 recursive-include streamlit_dnd/frontend *
 include README.md
+include CHANGELOG.md
 include LICENSE

@@ -53,10 +53,8 @@ DRAG_JS = """
 
 def goto_kanban(page):
     page.goto(URL, wait_until="networkidle")
-    page.wait_for_selector('[class*="st-key-ordering_list"]', timeout=20000)
+    page.wait_for_selector('[class*="st-key-kanban_todo"]', timeout=20000)
     page.wait_for_timeout(3000)
-    page.locator('button[role="tab"]').nth(1).click()
-    page.wait_for_timeout(2000)
 
 
 def get_cards(page, col):
@@ -80,7 +78,9 @@ def main() -> int:
         todo = get_cards(page, "todo")
         doing = get_cards(page, "doing")
         print(f"[1] Fresh: todo={todo}, doing={doing}")
-        if todo != ["Write spec", "Design schema", "Set up CI"] or doing != ["Build API"]:
+        if todo != ["Write spec", "Design schema", "Set up CI"] or doing != [
+            "Build API"
+        ]:
             failures.append("fresh start should show defaults")
         if STORE.exists():
             failures.append("store file should not exist before any move")
@@ -127,14 +127,13 @@ def main() -> int:
         # ----- 5. Reset button -> defaults + file deleted -----------------------
         page.locator('[data-testid="stSidebar"] button', has_text="Reset").click()
         page.wait_for_timeout(3000)
-        # After reset we land back on the first tab; go to kanban again.
-        page.locator('button[role="tab"]').nth(1).click()
-        page.wait_for_timeout(1500)
 
         todo5 = get_cards(page, "todo")
         doing5 = get_cards(page, "doing")
         print(f"[5] After reset: todo={todo5}, doing={doing5}")
-        if todo5 != ["Write spec", "Design schema", "Set up CI"] or doing5 != ["Build API"]:
+        if todo5 != ["Write spec", "Design schema", "Set up CI"] or doing5 != [
+            "Build API"
+        ]:
             failures.append("reset did not restore defaults")
         else:
             print("[5] PASS: reset restored defaults")
@@ -148,7 +147,9 @@ def main() -> int:
         todo6 = get_cards(page, "todo")
         doing6 = get_cards(page, "doing")
         print(f"[6] Reload after reset: todo={todo6}, doing={doing6}")
-        if todo6 != ["Write spec", "Design schema", "Set up CI"] or doing6 != ["Build API"]:
+        if todo6 != ["Write spec", "Design schema", "Set up CI"] or doing6 != [
+            "Build API"
+        ]:
             failures.append("defaults not stable after reset + reload")
         else:
             print("[6] PASS: reset persists across reload")

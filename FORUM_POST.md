@@ -12,7 +12,7 @@
 
 Hey everyone,
 
-I am excited to share a new custom component I have been working on: **streamlit-dnd**, drag-and-drop reordering for the things inside your Streamlit containers. You give it the keys of some keyed containers, and the direct children of those containers become draggable. You can reorder items inside a single container, or drag them between containers. When a drop happens, you get an event back describing the move so you can update your `session_state` however you like.
+I am excited to share a new custom component I have been working on: **streamlit-dnd**, drag-and-drop reordering for the things inside your Streamlit containers. You give it the keys of some keyed containers, and their keyed direct children become draggable. Unkeyed headings and controls stay fixed by default. You can reorder items inside a single container, or drag them between containers. When a drop happens, you get an event back describing the move so you can update your `session_state` however you like.
 
 [GIF: top-level demo showing items being dragged and reordered within a container, and dragged across two containers]
 
@@ -36,12 +36,12 @@ The whole idea is that you render normal keyed containers, then call `dnd()` wit
 import streamlit as st
 from streamlit_dnd import dnd, apply_move
 
-if "items" not in st.session_state:
-    st.session_state.items = {"list": ["Apples", "Bananas", "Cherries", "Dates"]}
+if "board" not in st.session_state:
+    st.session_state["board"] = {"list": ["Apples", "Bananas", "Cherries", "Dates"]}
 
 # 1. Render a keyed container whose children come from session state
 with st.container(key="list", border=True):
-    for it in st.session_state.items["list"]:
+    for it in st.session_state["board"]["list"]:
         with st.container(key=f"item_{it}", border=True):
             st.write(it)
 
@@ -50,7 +50,7 @@ event = dnd("list")
 
 # 3. Apply the drop to session state and rerun
 if event:
-    apply_move(event, st.session_state.items)
+    apply_move(event, st.session_state["board"])
     st.rerun()
 ```
 

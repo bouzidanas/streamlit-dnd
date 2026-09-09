@@ -17,7 +17,10 @@ Everything below is just filling in those four steps.
 
 ## What "draggable" actually means here
 
-You don't mark individual things as draggable one by one. Instead, you put your items inside a **container** and give that container a name (a "key"). Then you say "make the things in this container draggable." Every direct item you drew inside that container becomes something the user can pick up and move.
+You put your items inside a **container** and give that container a name (a
+"key"). Give each movable child its own key too. Then you say "make the keyed
+things in this container draggable." Unkeyed content such as a heading stays
+fixed by default.
 
 Think of the container as a labeled box. You tell the tool the name on the box, and it makes everything in the box rearrangeable.
 
@@ -35,8 +38,9 @@ if "tasks" not in st.session_state:
 
 # 1. Draw the list inside a named container.
 with st.container(key="my_tasks", border=True):
+    st.subheader("Tasks")  # fixed content is fine inside the container
     for task in st.session_state.tasks:
-        with st.container(border=True):
+        with st.container(key=f"task_{task}", border=True):
             st.write(task)
 
 # 2. Turn on drag-and-drop for that container.
@@ -45,7 +49,7 @@ event = dnd("my_tasks")
 
 # 3. If the user moved something, update your list and redraw.
 if event:
-    apply_move(event, {"my_tasks": st.session_state.tasks})
+    apply_move(event, st.session_state.tasks)
     st.rerun()
 ```
 
@@ -59,11 +63,12 @@ Call `dnd(...)` **after** you draw the container, not before. The tool needs the
 
 When the user drops an item, `dnd` hands you back a small description of what happened: which list it came from, which list it landed in, and where. You rarely need to read those details yourself. The helper `apply_move` does the reordering for you.
 
-You just give `apply_move` two things: the move that happened, and a little lookup of your lists by their container names.
+For one container, give `apply_move` the event and the list directly. For
+multiple containers, give it a lookup of the lists by their container names.
 
 ```python
 if event:
-    apply_move(event, {"my_tasks": st.session_state.tasks})
+    apply_move(event, st.session_state.tasks)
     st.rerun()
 ```
 
@@ -159,24 +164,24 @@ if "board" not in st.session_state:
 left, middle, right = st.columns(3)
 
 with left:
-    st.subheader("To do")
     with st.container(key="todo", border=True):
+        st.subheader("To do")
         for card in st.session_state.board["todo"]:
-            with st.container(border=True):
+            with st.container(key=f"todo_{card}", border=True):
                 st.write(card)
 
 with middle:
-    st.subheader("Doing")
     with st.container(key="doing", border=True):
+        st.subheader("Doing")
         for card in st.session_state.board["doing"]:
-            with st.container(border=True):
+            with st.container(key=f"doing_{card}", border=True):
                 st.write(card)
 
 with right:
-    st.subheader("Done")
     with st.container(key="done", border=True):
+        st.subheader("Done")
         for card in st.session_state.board["done"]:
-            with st.container(border=True):
+            with st.container(key=f"done_{card}", border=True):
                 st.write(card)
 
 # Name every container you want to participate.
@@ -189,13 +194,59 @@ if event:
 
 Two things to notice. First, you listed all three container names in the `dnd(...)` call, so the user can drag between any of them. Second, `st.session_state.board` is already a dictionary whose keys are the container names, so you can hand it straight to `apply_move`. Keeping your container names and your list names in sync like this makes everything tidy.
 
-## Keep the container holding only your list items
+## Fixed content and legacy unkeyed items
 
-This is the one rule that makes position tracking trustworthy, so it's worth saying plainly. When a drop happens, the move is described by **where the item was** and **where it ended up** in the stack (its old and new positions). For those positions to line up with your Python list, the draggable container has to contain *only* your list items, one per item, in the same order as the list.
+The safe default is `item_mode="keyed"`: only direct children with their own
+`key=` are movable and counted. This is why the headings in the example above
+can sit inside the containers without shifting card positions. Captions,
+dividers, and add-item controls can live there too, as long as they are unkeyed.
 
-That's why, in the example above, the `st.subheader("To do")` heading sits in the column but **outside** the `st.container(key="todo", ...)`. If you put the heading *inside* the keyed container, it becomes the container's first child, the tool counts it as position 0, and every real card is now off by one. The reported positions would no longer match your list, and `apply_move` would shuffle the wrong things.
+If you intentionally want every direct child to move, including unkeyed
+elements, opt into the pre-0.2 behavior:
 
-So the habit to keep: titles, dividers, "add item" buttons, and anything else that isn't a draggable item go *outside* the keyed container. Inside it, render one item per list entry and nothing else. Follow that and the recorded positions are reliable every time, keyed items or not.
+```python
+dnd("my_tasks", item_mode="all")
+```
+
+In that mode your Python list must contain exactly one entry for every rendered
+child, in the same order. `DropEvent.item_key` can also be `None`.
+
+## Lists, container mappings, and named objects
+
+For one list, pass the list directly:
+
+```python
+apply_move(event, st.session_state.tasks)
+```
+
+For several containers, map each container key to its list:
+
+```python
+apply_move(event, {
+    "todo": st.session_state.todo_tasks,
+    "done": st.session_state.done_tasks,
+})
+```
+
+The values can also be insertion-ordered dictionaries. This is convenient for
+named DataFrames:
+
+```python
+with st.container(key="reports", border=True):
+    st.subheader("Reports")
+    for name, frame in st.session_state.dfs.items():
+        with st.container(key=f"report_{name}", border=True):
+            st.write(name)
+            st.dataframe(frame)
+
+event = dnd("reports")
+if event:
+    apply_move(event, st.session_state.dfs, container_key="reports")
+    st.rerun()
+```
+
+This moves whole DataFrame cards. The rows inside `st.dataframe` are not
+separate Streamlit children and cannot be reordered by this component.
 
 ## Controlling what can go where
 
@@ -285,7 +336,9 @@ A single call covering several containers is the common case, so you usually won
 
 - **Nothing is draggable.** Make sure you called `dnd(...)` *after* drawing the containers, and that the names you passed match the `key=` you gave each `st.container`.
 - **Items snap back / don't stay moved.** You probably forgot `st.rerun()` after `apply_move`, or you're not reordering the same list you're drawing from.
-- **The wrong item moves, or things land one slot off.** You almost certainly have something other than a list item inside the keyed container (a heading, a divider, a button). Move it outside the container so the container holds only your items, one per list entry.
+- **Nothing is draggable after upgrading.** Version 0.2 moves keyed children by default. Give each item container a unique `key=`, or use `item_mode="all"` for the old behavior.
+- **`apply_move` reports a missing container.** Map the exact keys passed to `dnd()` to their backing collections. For one list, pass the list directly; for one ordered dict, use `container_key=`.
+- **The wrong item moves, or things land one slot off.** Make sure each movable keyed child corresponds to exactly one entry in the backing collection and is rendered in the same order.
 - **Dragging fights with buttons inside items.** You probably set `handle=False`. Drop that argument to get the default border handle back, or set `handle=True` for a corner grip — both keep the item's interior clickable.
 - **Moves go where they shouldn't.** Check your `cross`, `sources`, and `destinations` rules.
 

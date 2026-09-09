@@ -6,14 +6,13 @@ Usage:
 
 Covers:
   1. Page loads with no exceptions; dnd instances wire up.
-  2. Ordering tab: same-container reorder (cross=False), every block different.
+  2. Ordering section: same-container reorder (cross=False), every block different.
   3. Kanban: cross-container drag moves a card and persists.
   4. Playlist: source/destination rules (cannot drop into library).
   5. Highlight indicator mode (switch via sidebar radio).
   6. Handle mode: items get handles and are not draggable until handle pressed.
   7. Persistence expander present.
 
-Tab indices: 0=ordering, 1=kanban, 2=playlist, 3=widget board.
 """
 
 import sys
@@ -113,7 +112,6 @@ def main() -> int:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1600, "height": 1000})
         page.goto(URL, wait_until="networkidle")
-        # The ordering tab is the default (first) tab.
         page.wait_for_selector('[class*="st-key-ordering_list"]', timeout=20000)
         page.wait_for_timeout(3500)
 
@@ -140,7 +138,7 @@ def main() -> int:
         if not wired["kanban"]:
             failures.append("kanban not wired")
 
-        # ----- 2. Ordering tab: same-container reorder -------------------------
+        # ----- 2. Ordering section: same-container reorder ---------------------
         def get_ordering_blocks():
             return page.evaluate(
                 """() => [...document.querySelectorAll(
@@ -151,7 +149,7 @@ def main() -> int:
         blocks_before = get_ordering_blocks()
         print(f"\n[2] Ordering blocks before: {blocks_before}")
         if len(blocks_before) < 2:
-            failures.append("ordering tab has fewer than 2 blocks")
+            failures.append("ordering section has fewer than 2 blocks")
 
         # Drag the LAST block to the top (insertion index 0).
         log = page.evaluate(
@@ -168,15 +166,14 @@ def main() -> int:
 
         blocks_after = get_ordering_blocks()
         print(f"[2] Ordering blocks after: {blocks_after}")
-        if blocks_after[0] == blocks_before[-1] and set(blocks_after) == set(blocks_before):
+        if blocks_after[0] == blocks_before[-1] and set(blocks_after) == set(
+            blocks_before
+        ):
             print(f"[2] PASS: '{blocks_before[-1]}' moved to the top")
         else:
             failures.append("ordering same-container reorder failed")
 
         # ----- 3. Kanban cross-container drag ---------------------------------
-        page.locator('button[role="tab"]').nth(1).click()
-        page.wait_for_timeout(2000)
-
         before_todo = get_kanban_cards(page, "todo")
         before_doing = get_kanban_cards(page, "doing")
         print(f"\n[3] Kanban before: todo={before_todo}, doing={before_doing}")
@@ -199,9 +196,6 @@ def main() -> int:
             print(f"[3] PASS: '{moved_card}' moved todo -> doing")
 
         # ----- 4. Playlist source/destination rules ---------------------------
-        page.locator('button[role="tab"]').nth(2).click()
-        page.wait_for_timeout(2000)
-
         lib_before = get_songs(page, "playlist_library")
         queue_before = get_songs(page, "playlist_queue")
         print(f"\n[4] Playlist before: library={lib_before}, queue={queue_before}")
@@ -243,11 +237,11 @@ def main() -> int:
             print("[4b] PASS: no indicator shown over forbidden destination")
 
         # ----- 5. Highlight indicator mode -------------------------------------
-        # Switch sidebar radio to highlight mode, then go to the kanban tab.
-        page.locator('[data-testid="stSidebar"] [role="radiogroup"] label').nth(1).click()
+        # Switch the sidebar radio to highlight mode.
+        page.locator('[data-testid="stSidebar"] [role="radiogroup"] label').nth(
+            1
+        ).click()
         page.wait_for_timeout(2500)
-        page.locator('button[role="tab"]').nth(1).click()
-        page.wait_for_timeout(1500)
 
         log = page.evaluate(
             DRAG_JS_TEMPLATE,

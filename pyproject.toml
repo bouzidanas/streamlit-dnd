@@ -1,25 +1,43 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "streamlit-dnd"
-version = "0.1.1"
+dynamic = ["version"]
 description = "Drag-and-drop reordering for the children of Streamlit containers."
 readme = "README.md"
-requires-python = ">=3.8"
-license = { text = "MIT" }
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Anas Bouzid", email = "anasbouzid@gmail.com" }]
 keywords = ["streamlit", "streamlit-component", "drag-and-drop", "dnd", "reorder"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = ["streamlit>=1.58"]
+
+[project.optional-dependencies]
+test = [
+    "build>=1.2",
+    "playwright>=1.51",
+    "pytest>=8",
+    "ruff>=0.12",
+    "twine>=6",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
 
 [project.urls]
 Homepage = "https://github.com/bouzidanas/streamlit-dnd"
@@ -31,3 +49,10 @@ include = ["streamlit_dnd*"]
 
 [tool.setuptools.package-data]
 streamlit_dnd = ["frontend/*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "streamlit_dnd._version.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

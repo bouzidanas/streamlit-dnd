@@ -1,7 +1,9 @@
 """streamlit-dnd: drag-and-drop reordering for Streamlit containers.
 
-Turn the direct children of keyed ``st.container`` blocks into draggable
-items that can be reordered within a container or moved across containers.
+Turn keyed direct children of ``st.container`` blocks into draggable items
+that can be reordered within a container or moved across containers. Unkeyed
+content such as headings is ignored by default so DOM positions stay aligned
+with the Python collections that back the draggable items.
 
 Quick start::
 
@@ -33,16 +35,17 @@ so the app can persist the new order in ``st.session_state``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, MutableMapping, MutableSequence, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Mapping, Sequence
+from typing import Any, Literal
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-__version__ = "0.1.0"
+from ._version import __version__
 
-__all__ = ["dnd", "DropEvent", "apply_move", "__version__"]
+__all__ = ["DropEvent", "__version__", "apply_move", "dnd"]
 
 _FRONTEND_DIR = Path(__file__).parent / "frontend"
 
@@ -51,7 +54,7 @@ _component_func = None
 
 
 def _get_component():
-    global _component_func  # noqa: PLW0603
+    global _component_func
     if _component_func is None:
         _component_func = components.declare_component(
             "streamlit_dnd", path=str(_FRONTEND_DIR)
@@ -96,6 +99,7 @@ def dnd(
     sources: Sequence[str] | None = None,
     destinations: Sequence[str] | None = None,
     exclude: Sequence[str] | None = None,
+    item_mode: Literal["keyed", "all"] = "keyed",
     placeholder: str | Mapping[str, str] | None = None,
     handle: bool | Literal["border"] = "border",
     handle_corner: Literal[
@@ -134,6 +138,13 @@ def dnd(
         any other fixed content inside a draggable container can be pinned in
         place. Excluded items are also ignored by the drop-position math, so
         the container behaves as if they weren't there.
+    item_mode:
+        Which direct children are draggable. ``"keyed"`` (default) includes
+        only children with their own ``key=``. This safely ignores headings,
+        captions, dividers, and other fixed content users commonly place in a
+        list container. ``"all"`` restores the legacy behavior where every
+        direct Streamlit child is draggable; in that mode the backing Python
+        collection must contain one entry for every child, in the same order.
     placeholder:
         Dimmed, italic hint text shown inside a container while it has no
         draggable items (e.g. ``"Drop items here"``). The component injects and
@@ -182,19 +193,53 @@ def dnd(
         if isinstance(entry, str):
             keys.append(entry)
         else:
-            keys.extend(entry)
+            try:
+                keys.extend(entry)
+            except TypeError as exc:
+                raise TypeError(
+                    "container keys must be strings or iterables of strings"
+                ) from exc
     if not keys:
         raise ValueError("dnd() needs at least one container key")
+    if any(
+        not isinstance(container_key, str) or not container_key
+        for container_key in keys
+    ):
+        raise ValueError("every dnd() container key must be a non-empty string")
+    if len(set(keys)) != len(keys):
+        raise ValueError("dnd() container keys must be unique")
+
+    source_keys = _normalize_key_option(sources, "sources")
+    destination_keys = _normalize_key_option(destinations, "destinations")
+    excluded_keys = _normalize_key_option(exclude, "exclude")
+
+    for option_name, option_keys in (
+        ("sources", source_keys),
+        ("destinations", destination_keys),
+    ):
+        if option_keys is None:
+            continue
+        unknown = set(option_keys) - set(keys)
+        if unknown:
+            raise ValueError(
+                f"{option_name} contains keys not passed to dnd(): {sorted(unknown)!r}"
+            )
+
+    if not isinstance(cross, bool):
+        raise TypeError(f"cross must be a bool, got {cross!r}")
 
     if indicator not in ("line", "highlight", "ghost"):
         raise ValueError(
             f"indicator must be 'line', 'highlight', or 'ghost', got {indicator!r}"
         )
 
+    if not isinstance(handle, (bool, str)):
+        raise TypeError(f"handle must be a bool or 'border', got {handle!r}")
     if handle not in (True, False, "border"):
-        raise ValueError(
-            f"handle must be True, False, or 'border', got {handle!r}"
-        )
+        raise ValueError(f"handle must be True, False, or 'border', got {handle!r}")
+
+    if item_mode not in ("keyed", "all"):
+        raise ValueError(f"item_mode must be 'keyed' or 'all', got {item_mode!r}")
 
     valid_corners = ("top-left", "top-right", "bottom-left", "bottom-right")
     if handle_corner not in valid_corners:
@@ -202,13 +247,25 @@ def dnd(
             f"handle_corner must be one of {valid_corners}, got {handle_corner!r}"
         )
 
+    if not isinstance(handle_icon, str):
+        raise TypeError(f"handle_icon must be a string, got {handle_icon!r}")
+    if not isinstance(color, str):
+        raise TypeError(f"color must be a CSS color string, got {color!r}")
+    if not color:
+        raise ValueError(f"color must be a non-empty CSS color string, got {color!r}")
+    if not isinstance(key, str):
+        raise TypeError(f"key must be a string, got {key!r}")
+    if not key:
+        raise ValueError(f"key must be a non-empty string, got {key!r}")
+
     raw = _get_component()(
         instance_id=key,
         containers=keys,
         cross=cross,
-        sources=list(sources) if sources is not None else None,
-        destinations=list(destinations) if destinations is not None else None,
-        exclude=list(exclude) if exclude is not None else None,
+        sources=source_keys,
+        destinations=destination_keys,
+        exclude=excluded_keys,
+        item_mode=item_mode,
         placeholder=dict(placeholder)
         if isinstance(placeholder, Mapping)
         else placeholder,
@@ -243,9 +300,13 @@ def dnd(
 
 def apply_move(
     event: DropEvent,
-    lists: dict[str, list],
+    collections: Mapping[str, MutableSequence | MutableMapping]
+    | MutableSequence
+    | MutableMapping,
+    *,
+    container_key: str | None = None,
 ) -> None:
-    """Apply a :class:`DropEvent` to plain Python lists, in place.
+    """Apply a :class:`DropEvent` to mutable Python collections, in place.
 
     A convenience helper for the common pattern where each draggable
     container is rendered from a list in ``st.session_state``::
@@ -260,19 +321,144 @@ def apply_move(
     ----------
     event:
         The drop event returned by :func:`dnd`.
-    lists:
-        Mapping of container key -> list of items rendered in that
-        container (in render order).
-    """
-    src = lists[event.from_container]
-    dst = lists[event.to_container]
+    collections:
+        Usually a mapping of ``st.container`` key to the mutable list rendered
+        in that container. For a single-container reorder, a list can be passed
+        directly. Ordered mutable mappings are also supported, which makes a
+        dict of named DataFrames (or other named objects) reorderable without
+        converting it to a list.
+    container_key:
+        Treat ``collections`` itself as the backing collection for this one
+        container. This is mainly useful when the collection is a dict, since
+        a dict would otherwise be interpreted as the container-to-collection
+        mapping. Both event container keys must match this value.
 
-    item = src.pop(event.from_index)
+    Raises
+    ------
+    KeyError
+        If a container key is missing from the supplied mapping. The message
+        includes the expected shape and the keys that were supplied.
+    IndexError
+        If the browser event no longer lines up with the backing collection.
+    TypeError
+        If a backing collection is not a mutable sequence or mutable mapping,
+        or a move tries to cross between those two different collection kinds.
+    """
+    if not isinstance(event, DropEvent):
+        raise TypeError(f"event must be a DropEvent, got {type(event).__name__}")
+
+    if container_key is not None:
+        if not isinstance(container_key, str) or not container_key:
+            raise ValueError("container_key must be a non-empty string")
+        if event.from_container != container_key or event.to_container != container_key:
+            raise ValueError(
+                "container_key can only be used for a same-container move; "
+                f"event is {event.from_container!r} -> {event.to_container!r}"
+            )
+        src = dst = collections
+    elif isinstance(collections, MutableSequence):
+        if event.from_container != event.to_container:
+            raise ValueError(
+                "a single collection can only handle a same-container move; "
+                "pass {container_key: collection, ...} for cross-container moves"
+            )
+        src = dst = collections
+    else:
+        if not isinstance(collections, Mapping):
+            raise TypeError(
+                "collections must be a mutable sequence, a mutable mapping, or "
+                "a mapping of container keys to mutable collections"
+            )
+        missing = [
+            key
+            for key in (event.from_container, event.to_container)
+            if key not in collections
+        ]
+        if missing:
+            supplied = list(collections.keys())
+            hint = (
+                "Pass a mapping whose keys match dnd(...), for example "
+                "{'left': left_items, 'right': right_items}. For one list, "
+                "pass that list directly. For one ordered dict, pass it with "
+                f"container_key={event.from_container!r}."
+            )
+            raise KeyError(
+                f"no backing collection for container(s) {missing!r}; "
+                f"supplied keys are {supplied!r}. {hint}"
+            )
+        src = collections[event.from_container]
+        dst = collections[event.to_container]
+
+    src_kind = _collection_kind(src, event.from_container)
+    dst_kind = _collection_kind(dst, event.to_container)
+    if src_kind != dst_kind:
+        raise TypeError(
+            "cross-container moves require matching collection types; got "
+            f"{src_kind} for {event.from_container!r} and {dst_kind} for "
+            f"{event.to_container!r}"
+        )
+
+    if not isinstance(event.from_index, int) or isinstance(event.from_index, bool):
+        raise TypeError("DropEvent.from_index must be an integer")
+    if not isinstance(event.to_index, int) or isinstance(event.to_index, bool):
+        raise TypeError("DropEvent.to_index must be an integer")
+    if not 0 <= event.from_index < len(src):
+        raise IndexError(
+            f"drop source index {event.from_index} is outside backing collection "
+            f"{event.from_container!r} (length {len(src)}). The rendered draggable "
+            "items and backing collection are out of sync. Give each movable child "
+            "a unique key and use the default item_mode='keyed', or ensure "
+            "item_mode='all' has one data entry per rendered child."
+        )
 
     to_index = event.to_index
     if src is dst and event.from_index < to_index:
         # Removing the item shifted everything after it left by one.
         to_index -= 1
-    to_index = max(0, min(to_index, len(dst)))
 
-    dst.insert(to_index, item)
+    if src_kind == "sequence":
+        item = src.pop(event.from_index)
+        to_index = max(0, min(to_index, len(dst)))
+        dst.insert(to_index, item)
+        return
+
+    # Dict insertion order is the display order. Rebuild the mapping after
+    # moving one (key, value) pair so named DataFrames and similar objects work
+    # without a parallel list of names.
+    source_key = list(src.keys())[event.from_index]
+    item = (source_key, src[source_key])
+    if src is not dst and source_key in dst:
+        raise ValueError(
+            f"cannot move mapping entry {source_key!r} into "
+            f"{event.to_container!r}: that key already exists"
+        )
+    del src[source_key]
+    destination_items = list(dst.items())
+    to_index = max(0, min(to_index, len(destination_items)))
+    destination_items.insert(to_index, item)
+    dst.clear()
+    dst.update(destination_items)
+
+
+def _collection_kind(collection: Any, container_key: str) -> str:
+    """Return the supported collection family, with a useful error otherwise."""
+    if isinstance(collection, MutableSequence):
+        return "sequence"
+    if isinstance(collection, MutableMapping):
+        return "mapping"
+    raise TypeError(
+        f"backing collection for {container_key!r} must be a mutable sequence "
+        f"or mutable mapping, got {type(collection).__name__}"
+    )
+
+
+def _normalize_key_option(
+    value: Sequence[str] | None, option_name: str
+) -> list[str] | None:
+    """Normalize a key option, accepting one string as a convenience."""
+    if value is None:
+        return None
+    values = [value] if isinstance(value, str) else list(value)
+    if any(not isinstance(entry, str) or not entry for entry in values):
+        raise ValueError(f"{option_name} must contain only non-empty strings")
+    return values

@@ -83,7 +83,9 @@ GHOST_DRAG_JS = """
         stage: 'hover gap 1',
         order: visualOrder(),
         ghosts: ghostsAfterHover1.length,
-        ghostOpacity: ghostsAfterHover1[0] ? getComputedStyle(ghostsAfterHover1[0]).opacity : null,
+        ghostContentOpacity: ghostsAfterHover1[0]?.firstElementChild
+            ? getComputedStyle(ghostsAfterHover1[0].firstElementChild).opacity
+            : null,
         ghostOutline: ghostsAfterHover1[0] ? ghostsAfterHover1[0].style.outline : null,
         ghostPointerEvents: ghostsAfterHover1[0] ? getComputedStyle(ghostsAfterHover1[0]).pointerEvents : null,
     });
@@ -151,12 +153,16 @@ def main() -> int:
         page.wait_for_timeout(3500)
 
         # ----- 1. Switch to ghost mode via sidebar -----------------------------
-        page.locator('[data-testid="stSidebar"] [role="radiogroup"] label').nth(2).click()
+        page.locator('[data-testid="stSidebar"] [role="radiogroup"] label').nth(
+            2
+        ).click()
         page.wait_for_timeout(2500)
         print("[1] Switched sidebar to ghost mode")
 
         # ----- 2-4. Drag with ghost preview, then drop --------------------------
-        result = page.evaluate(GHOST_DRAG_JS, {"container": "ordering_list", "fromIndex": 0})
+        result = page.evaluate(
+            GHOST_DRAG_JS, {"container": "ordering_list", "fromIndex": 0}
+        )
         if "error" in result:
             print("ERROR:", result["error"])
             return 1
@@ -175,7 +181,9 @@ def main() -> int:
             failures.append(f"expected 1 ghost during hover, got {hover1['ghosts']}")
         if hover1["order"][1] != "<ghost>":
             failures.append(f"ghost not at expected position 1: {hover1['order']}")
-        op = float(hover1.get("ghostOpacity") or 1)
+        # The content fades while the wrapper remains opaque so its outline
+        # stays crisp and fully visible.
+        op = float(hover1.get("ghostContentOpacity") or 1)
         if not (0.3 <= op <= 0.8):
             failures.append(f"ghost preview should be translucent, opacity={op}")
         if hover1.get("ghostPointerEvents") != "none":
@@ -184,9 +192,13 @@ def main() -> int:
         # Ghost moved to end on second hover, still exactly one
         hoverEnd = steps["hover end"]
         if hoverEnd["ghosts"] != 1:
-            failures.append(f"expected 1 ghost after moving hover, got {hoverEnd['ghosts']}")
+            failures.append(
+                f"expected 1 ghost after moving hover, got {hoverEnd['ghosts']}"
+            )
         if hoverEnd["order"][-1] != "<ghost>":
-            failures.append(f"ghost should be last after hovering end: {hoverEnd['order']}")
+            failures.append(
+                f"ghost should be last after hovering end: {hoverEnd['order']}"
+            )
 
         # After drop: materialized (opaque, interactive), source collapsed
         afterDrop = steps["after drop (pre-rerender)"]
@@ -196,28 +208,38 @@ def main() -> int:
         if mop < 0.99:
             failures.append(f"materialized ghost should be opaque, opacity={mop}")
         if afterDrop.get("materializedPointerEvents") == "none":
-            failures.append("materialized ghost should be interactive (pointer-events restored)")
+            failures.append(
+                "materialized ghost should be interactive (pointer-events restored)"
+            )
         if not afterDrop.get("sourceCollapsed"):
             failures.append("source element should be collapsed after drop")
         if "<ghost-materialized>" not in afterDrop["order"]:
             failures.append("order should contain materialized ghost")
 
         if not failures:
-            print("\n[2-4] PASS: ghost preview, repositioning, and materialization all correct")
+            print(
+                "\n[2-4] PASS: ghost preview, repositioning, and materialization all correct"
+            )
 
         # ----- 5. After Streamlit rerender --------------------------------------
         page.wait_for_timeout(3000)
         after = page.evaluate(CHECK_AFTER_RERENDER_JS, "ordering_list")
         print(f"\n[5] After rerender: {after}")
         if after["ghosts"] != 0:
-            failures.append(f"ghost should be removed after rerender, found {after['ghosts']}")
+            failures.append(
+                f"ghost should be removed after rerender, found {after['ghosts']}"
+            )
         if after["collapsed"] != 0:
-            failures.append(f"no element should remain collapsed, found {after['collapsed']}")
+            failures.append(
+                f"no element should remain collapsed, found {after['collapsed']}"
+            )
         # The dragged item (order_intro_block) should now be LAST
         if not after["order"] or after["order"][-1] != "order_intro_block":
             failures.append(f"intro_block should be last after move: {after['order']}")
         else:
-            print("[5] PASS: ghost cleaned up, real item in new position, order persisted")
+            print(
+                "[5] PASS: ghost cleaned up, real item in new position, order persisted"
+            )
 
         # Verify the item count is right (no duplicates, nothing lost)
         if len(after["order"]) != 6:
@@ -225,9 +247,12 @@ def main() -> int:
 
         # ----- 6. Cancelled drag removes preview --------------------------------
         result2 = page.evaluate(
-            GHOST_DRAG_JS, {"container": "ordering_list", "fromIndex": 0, "cancel": True}
+            GHOST_DRAG_JS,
+            {"container": "ordering_list", "fromIndex": 0, "cancel": True},
         )
-        cancel_step = [s for s in result2["steps"] if s["stage"] == "after cancel"][0]
+        cancel_step = next(
+            step for step in result2["steps"] if step["stage"] == "after cancel"
+        )
         print(f"\n[6] After cancelled drag: ghosts={cancel_step['ghosts']}")
         if cancel_step["ghosts"] != 0:
             failures.append("cancelled drag should remove the preview ghost")

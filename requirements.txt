@@ -2,4 +2,4 @@ streamlit>=1.58
 pandas
 
 # For running the e2e tests (optional)
-# playwright>=1.60
+# playwright>=1.51

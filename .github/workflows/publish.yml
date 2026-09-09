@@ -8,8 +8,25 @@ on:
       - "v*"
 
 jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install and test
+        run: |
+          python -m pip install -e ".[test]"
+          python -m pytest
+          python -m ruff check streamlit_dnd tests
+          python -m ruff format --check streamlit_dnd tests
+          node --check streamlit_dnd/frontend/main.js
+
   build:
     name: Build distributions
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,9 +52,45 @@ jobs:
           name: dist
           path: dist/
 
+  e2e:
+    name: Packaged E2E / Streamlit ${{ matrix.streamlit }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        streamlit: ["1.58.0", latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Install wheel and E2E runtime
+        run: |
+          python -m pip install playwright
+          python -m pip install --force-reinstall dist/*.whl
+      - name: Install minimum Streamlit
+        if: matrix.streamlit != 'latest'
+        run: python -m pip install --force-reinstall "streamlit==${{ matrix.streamlit }}"
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Run real-input E2E
+        run: python tests/e2e_real.py --browser chromium --artifacts test-results/e2e
+      - name: Upload E2E diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-e2e-${{ matrix.streamlit }}
+          path: test-results/e2e/
+          if-no-files-found: ignore
+
   publish:
     name: Publish to PyPI
-    needs: build
+    needs: [build, e2e]
     runs-on: ubuntu-latest
     environment:
       name: pypi
